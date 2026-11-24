@@ -1,0 +1,30 @@
+# Нормализация переводов строк
+* text=auto
+
+# Windows-скрипты должны сохранять CRLF: иначе cmd.exe и powershell.exe 5.1 ломают путь и кодировку
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+
+# Исходники и документация
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+
+# Служебные файлы git — LF
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.sha256 text eol=lf
+
+# Бинарные файлы
+*.exe binary
+*.dll binary
+*.bin binary
+*.img binary
+*.nupkg binary
+*.pcapng binary
+*.ttf binary
+*.pdf binary
