@@ -4,15 +4,13 @@ use std::{
     process::ExitCode,
 };
 
-use fpv_core::{console, devices, log::SessionLog, ports};
+use fpv_core::{console, devices, log::SessionLog, ports, usb};
 
-const MENU_HEADER: &str = concat!("FPV-Flasher ", env!("CARGO_PKG_VERSION"));
-
-const MENU_BODY: &str = "\n1. Полётные контроллеры (STM32)\n\
-2. Модули управления\n\
-3. Walksnail\n\
-0. Выход\n\
-> ";
+const MENU_ITEMS: &str = "\
+  1. Полётные контроллеры (STM32)\n\
+  2. Модули управления\n\
+  3. Walksnail\n\
+  0. Выход\n";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Action {
@@ -33,22 +31,41 @@ fn parse(line: &str) -> Action {
     }
 }
 
-/// Ports are inspected per redraw; a missing device must never stop the menu.
-fn describe_devices() -> String {
-    match ports::list_ports() {
-        Ok(list) if list.is_empty() => {
-            "Устройства: последовательных портов не найдено.".to_string()
+/// Colour is applied only for a real terminal, so redirected output and pipes stay plain.
+struct Style {
+    enabled: bool,
+}
+
+impl Style {
+    fn paint(&self, code: &str, text: &str) -> String {
+        if self.enabled {
+            format!("\x1B[{code}m{text}\x1B[0m")
+        } else {
+            text.to_string()
         }
-        Ok(list) => {
-            let mut lines = vec!["Устройства:".to_string()];
-            lines.extend(
-                list.iter()
-                    .map(|port| format!("  {}", devices::describe(port))),
-            );
-            lines.join("\n")
-        }
-        Err(error) => format!("Устройства: не удалось перечислить порты ({error})."),
     }
+}
+
+/// Connected hardware: COM ports with a recognised type, plus DFU bootloaders.
+fn describe_devices() -> Vec<String> {
+    let mut lines = Vec::new();
+    match ports::list_ports() {
+        Ok(list) if list.is_empty() => lines.push("последовательных портов нет".to_string()),
+        Ok(list) => lines.extend(
+            list.iter()
+                .map(|port| format!("  {}", devices::describe(port))),
+        ),
+        Err(error) => lines.push(format!("не удалось перечислить COM-порты ({error})")),
+    }
+    match usb::list_dfu_devices() {
+        Ok(found) => lines.extend(
+            found
+                .iter()
+                .map(|device| format!("  {}", device.display_name())),
+        ),
+        Err(error) => lines.push(format!("не удалось перечислить USB-устройства ({error})")),
+    }
+    lines
 }
 
 fn run_menu(
@@ -58,14 +75,31 @@ fn run_menu(
     is_terminal: bool,
     mut run_fc: impl FnMut() -> io::Result<()>,
 ) -> io::Result<()> {
+    let style = Style {
+        enabled: is_terminal,
+    };
+    let title = style.paint(
+        "1;36",
+        &format!(
+            "==========   FPV-Flasher {}   ==========",
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
+    let separator = style.paint("90", &"-".repeat(52));
+    let heading = style.paint("1;37", "Устройства:");
+
     let mut line = String::new();
     loop {
         if is_terminal {
             output.write_all(console::CLEAR_SCREEN.as_bytes())?;
         }
-        writeln!(output, "{MENU_HEADER}")?;
-        output.write_all(describe_devices().as_bytes())?;
-        output.write_all(MENU_BODY.as_bytes())?;
+        writeln!(output, "{title}")?;
+        writeln!(output, "{separator}")?;
+        writeln!(output, "{heading}")?;
+        for entry in describe_devices() {
+            writeln!(output, "{entry}")?;
+        }
+        write!(output, "\n{MENU_ITEMS}\n> ")?;
         output.flush()?;
 
         line.clear();
@@ -87,6 +121,27 @@ fn run_menu(
     }
 }
 
+fn describe_ports_once(log: &mut SessionLog) {
+    match ports::list_ports() {
+        Ok(list) if list.is_empty() => log.record("Последовательные порты не найдены."),
+        Ok(list) => {
+            for port in &list {
+                log.record(&devices::describe(port));
+            }
+        }
+        Err(error) => log.record_error(&format!("Не удалось перечислить порты: {error}")),
+    }
+    match usb::list_dfu_devices() {
+        Ok(found) if found.is_empty() => log.record("DFU-устройства не найдены."),
+        Ok(found) => {
+            for device in &found {
+                log.record(&device.display_name());
+            }
+        }
+        Err(error) => log.record_error(&format!("Не удалось перечислить USB: {error}")),
+    }
+}
+
 fn main() -> ExitCode {
     let mut log = match env::current_exe() {
         Ok(exe) => exe.parent().map_or_else(
@@ -96,15 +151,7 @@ fn main() -> ExitCode {
         Err(_) => SessionLog::create(std::path::Path::new("fpv-flasher.log")),
     };
     if env::args().skip(1).any(|argument| argument == "--ports") {
-        match ports::list_ports() {
-            Ok(list) if list.is_empty() => log.record("Последовательные порты не найдены."),
-            Ok(list) => {
-                for port in &list {
-                    log.record(&devices::describe(port));
-                }
-            }
-            Err(error) => log.record_error(&format!("Не удалось перечислить порты: {error}")),
-        }
+        describe_ports_once(&mut log);
         return ExitCode::SUCCESS;
     }
 

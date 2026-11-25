@@ -7,6 +7,7 @@ pub mod console;
 pub mod devices;
 pub mod log;
 pub mod ports;
+pub mod usb;
 pub mod wait;
 
 /// Locate an unpacked app or a local Cargo build without relying on the working directory.

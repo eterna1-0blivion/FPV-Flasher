@@ -26,7 +26,7 @@ impl DeviceKind {
 pub const KNOWN_DEVICES: &[DeviceKind] = &[
     DeviceKind {
         id: "walksnail",
-        title: "Walksnail (Caddx Ascent / Avatar)",
+        title: "Walksnail (Ascent)",
         vids: &[0x1D76],
         pids: &[0x0101],
     },
@@ -75,7 +75,10 @@ mod tests {
     #[test]
     fn recognises_walksnail_and_stm32_from_real_observations() {
         assert_eq!(identify(&port(0x1D76, 0x0101)).unwrap().id, "walksnail");
-        assert!(describe(&port(0x1D76, 0x0101)).starts_with("COM4 (1D76:0101) — Walksnail"));
+        assert_eq!(
+            describe(&port(0x1D76, 0x0101)),
+            "COM4 (1D76:0101) — Walksnail (Ascent)"
+        );
         let stm32 = identify(&port(0x0483, 0x5740)).unwrap();
         assert!(stm32.id == "stm32-vcp", "первым в списке идёт STM32 VCP");
     }
