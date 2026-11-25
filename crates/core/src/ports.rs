@@ -5,6 +5,10 @@ use std::fmt;
 pub struct UsbId(u16);
 
 impl UsbId {
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
     pub fn from_hex(text: &str) -> Option<Self> {
         u16::from_str_radix(text.trim_start_matches("0x"), 16)
             .ok()
@@ -44,7 +48,9 @@ pub fn list_ports() -> Result<Vec<PortInfo>, serialport::Error> {
         .into_iter()
         .map(|port| PortInfo {
             usb: match port.port_type {
-                serialport::SerialPortType::UsbPort(usb) => Some((UsbId(usb.vid), UsbId(usb.pid))),
+                serialport::SerialPortType::UsbPort(usb) => {
+                    Some((UsbId::new(usb.vid), UsbId::new(usb.pid)))
+                }
                 _ => None,
             },
             name: port.port_name,
@@ -86,7 +92,7 @@ mod tests {
     fn formats_ports_with_and_without_usb_ids() {
         let usb = PortInfo {
             name: "COM4".into(),
-            usb: Some((UsbId(0x1d76), UsbId(0x0101))),
+            usb: Some((UsbId::new(0x1d76), UsbId::new(0x0101))),
         };
         assert_eq!(usb.display_name(), "COM4 (1D76:0101)");
         let plain = PortInfo {
