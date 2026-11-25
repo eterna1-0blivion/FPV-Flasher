@@ -23,9 +23,16 @@
 ```powershell
 cargo run --offline
 cargo test --workspace --offline
+cargo run --release --offline -p xtask
 ```
 
-Сборка не требует загрузки зависимостей из сети.
+Последняя команда собирает архив `dist\FPV-Flasher-<версия>.zip`: проверяет `vendor.sha256`,
+кладёт exe, `legacy\`, `docs\` и файлы из манифеста `vendor/`. Лишние файлы в `vendor/`
+(например `Zadig-2.9.exe`) в архив не попадают.
+
+Диагностика без меню: `fpv-flasher.exe --ports` показывает последовательные порты с VID:PID,
+не открывая их. Журнал сессии пишется рядом с exe в `fpv-flasher.log`; если каталог только для
+чтения, программа продолжает работу.
 
 ## Структура
 

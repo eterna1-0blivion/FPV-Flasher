@@ -3,6 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod log;
+pub mod ports;
+
 /// Locate an unpacked app or a local Cargo build without relying on the working directory.
 pub fn find_app_root(executable: &Path) -> io::Result<PathBuf> {
     let find = || {

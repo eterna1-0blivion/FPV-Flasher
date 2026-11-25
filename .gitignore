@@ -8,6 +8,8 @@ tools/
 # Сборочные каталоги
 target/
 dist/
+# Журналы сессий рядом с exe или в корне
+fpv-flasher.log
 
 # --- Служебное ---
 .git-old/
