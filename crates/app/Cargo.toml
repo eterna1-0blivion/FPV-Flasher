@@ -1,0 +1,11 @@
+[package]
+name = "fpv-flasher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fpv-core = { path = "../core" }
+fpv-fc = { path = "../fc" }
+fpv-radio = { path = "../radio" }
+fpv-walksnail = { path = "../walksnail" }
