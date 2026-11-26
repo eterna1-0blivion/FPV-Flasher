@@ -81,17 +81,35 @@ impl Version {
     }
 }
 
+/// Transmitter images carry the file size at this offset and the CRC32 of everything from
+/// [`BODY_START`] to the end of the file in the four bytes before it. 16_5_9 leaves the CRC at 0.
+const SKY_CRC_OFFSET: usize = 112;
+const SKY_SIZE_OFFSET: usize = 116;
+const BODY_START: usize = 0x80;
+
+/// Result of the integrity check stored in the image itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Integrity {
+    /// The stored CRC32 matches the body.
+    Verified,
+    /// The image has no stored CRC (seen on 16_5_9 and on receiver images).
+    NotRecorded,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImageInfo {
     pub kind: ImageKind,
     pub version: Version,
     pub size: usize,
+    pub integrity: Integrity,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ImageError {
     TooShort { got: usize },
     BadMagic,
+    SizeMismatch { declared: u32, actual: usize },
+    BadCrc { stored: u32, calculated: u32 },
 }
 
 impl fmt::Display for ImageError {
@@ -102,8 +120,58 @@ impl fmt::Display for ImageError {
                 "файл прошивки короче заголовка: {got} из {HEADER_LEN} байт"
             ),
             Self::BadMagic => write!(formatter, "не файл прошивки Walksnail (нет сигнатуры ASW)"),
+            Self::SizeMismatch { declared, actual } => write!(
+                formatter,
+                "размер в заголовке {declared} байт, файл {actual} байт: файл обрезан или дописан"
+            ),
+            Self::BadCrc { stored, calculated } => write!(
+                formatter,
+                "контрольная сумма образа не совпала (0x{stored:08X} в заголовке, 0x{calculated:08X} \
+                 по содержимому): файл повреждён"
+            ),
         }
     }
+}
+
+/// Why an image must not be written, or what the user has to confirm first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    WrongKind { image: ImageKind, device: String },
+    BelowMinimum { image: Version },
+    UnknownCurrent,
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { image, device } => {
+                write!(
+                    formatter,
+                    "образ для «{image}» не подходит устройству «{device}»"
+                )
+            }
+            Self::BelowMinimum { image } => write!(
+                formatter,
+                "версия {image} ниже {}: такие образы не принимаются (см. docs/protocols)",
+                Version::MINIMUM
+            ),
+            Self::UnknownCurrent => {
+                write!(
+                    formatter,
+                    "не удалось прочитать версию прошивки на устройстве"
+                )
+            }
+        }
+    }
+}
+
+/// Direction of the change, decided from the image content and the device answer only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    Upgrade,
+    Reinstall,
+    /// Allowed only when the caller passes `allow_downgrade`.
+    Downgrade,
 }
 
 impl std::error::Error for ImageError {}
@@ -117,7 +185,26 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     ])
 }
 
+/// What the checks decided, plus warnings the user has to see before confirming.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Assessment {
+    pub change: Change,
+    pub current: Version,
+    pub warnings: Vec<String>,
+}
+
+/// Every captured attempt to flash a pre-18.x image onto a device running 18.x (or the other
+/// way round) failed with status -8 ("image type error"); 18.x images also mark two more
+/// section records with a flag the earlier versions do not set. We only use this to warn
+/// before a downgrade, not to block it outright.
+const NEW_LAYOUT_SINCE: Version = Version {
+    major: 18,
+    minor: 0,
+    patch: 0,
+};
+
 impl ImageInfo {
+    /// Read type, version and integrity from the file content. The file name is never used.
     pub fn parse(bytes: &[u8]) -> Result<Self, ImageError> {
         if bytes.len() < HEADER_LEN {
             return Err(ImageError::TooShort { got: bytes.len() });
@@ -125,45 +212,117 @@ impl ImageInfo {
         if bytes[..4] != MAGIC {
             return Err(ImageError::BadMagic);
         }
+        let kind = ImageKind::from_type(u32_at(bytes, 4));
+        let mut integrity = Integrity::NotRecorded;
+        if kind == ImageKind::Transmitter && bytes.len() >= BODY_START {
+            let declared = u32_at(bytes, SKY_SIZE_OFFSET);
+            if declared != 0 && declared as usize != bytes.len() {
+                return Err(ImageError::SizeMismatch {
+                    declared,
+                    actual: bytes.len(),
+                });
+            }
+            let stored = u32_at(bytes, SKY_CRC_OFFSET);
+            if stored != 0 {
+                let calculated = crate::frame::crc32(&bytes[BODY_START..]);
+                if calculated != stored {
+                    return Err(ImageError::BadCrc { stored, calculated });
+                }
+                integrity = Integrity::Verified;
+            }
+        }
         Ok(Self {
-            kind: ImageKind::from_type(u32_at(bytes, 4)),
+            kind,
             version: Version {
                 major: u32_at(bytes, 8),
                 minor: u32_at(bytes, 12),
                 patch: u32_at(bytes, 16),
             },
             size: bytes.len(),
+            integrity,
         })
     }
 
-    /// A transmitter image must not be written to a receiver and the other way round.
-    pub fn matches(&self, device: &crate::DeviceInfo) -> bool {
-        let is_receiver = device.device_name.contains("Gnd");
-        match self.kind {
-            ImageKind::Receiver => is_receiver,
-            ImageKind::Transmitter => !is_receiver,
-            ImageKind::Other(_) => false,
+    /// Decide what writing this image would do. Downgrades are not refused here: the caller
+    /// must show `warnings` and get an explicit confirmation before flashing.
+    pub fn assess(&self, device: &crate::DeviceInfo) -> Result<Assessment, Refusal> {
+        let kind_ok = matches!(
+            (self.kind, device.side()),
+            (ImageKind::Transmitter, Some(crate::Side::Transmitter))
+                | (ImageKind::Receiver, Some(crate::Side::Receiver))
+        );
+        if !kind_ok {
+            return Err(Refusal::WrongKind {
+                image: self.kind,
+                device: device.device_name.clone(),
+            });
         }
-    }
-
-    /// Caddx refuses images older than `16_4_4`; we do the same before touching the device.
-    pub fn is_flashable(&self, current: Option<Version>) -> Result<(), String> {
         if self.version < Version::MINIMUM {
-            return Err(format!(
-                "версия {} старше минимально поддерживаемой {}",
-                self.version,
-                Version::MINIMUM
-            ));
+            return Err(Refusal::BelowMinimum {
+                image: self.version,
+            });
         }
-        if let Some(current) = current
-            && self.version <= current
-        {
-            return Err(format!(
-                "версия {} не новее установленной {current}: понижение не поддерживается",
+        let current = device
+            .firmware_version()
+            .and_then(Version::parse)
+            .ok_or(Refusal::UnknownCurrent)?;
+
+        let change = match self.version.cmp(&current) {
+            std::cmp::Ordering::Greater => Change::Upgrade,
+            std::cmp::Ordering::Equal => Change::Reinstall,
+            std::cmp::Ordering::Less => Change::Downgrade,
+        };
+        let mut warnings = Vec::new();
+        if change == Change::Downgrade {
+            warnings.push(format!(
+                "понижение версии {current} → {}: подтверждено успешными перепрошивками",
                 self.version
             ));
+            if self.kind == ImageKind::Transmitter
+                && current >= NEW_LAYOUT_SINCE
+                && self.version < NEW_LAYOUT_SINCE
+            {
+                warnings.push(
+                    "с версии 18.x на 17.x и 16.x передатчики во всех проверенных случаях \
+                     отвечали «image type error» (-8): прошивка не начнётся, устройство \
+                     останется на текущей версии"
+                        .to_string(),
+                );
+            }
         }
-        Ok(())
+        if self.integrity == Integrity::NotRecorded {
+            warnings.push(
+                "в образе нет контрольной суммы, целостность проверит только устройство"
+                    .to_string(),
+            );
+        }
+        Ok(Assessment {
+            change,
+            current,
+            warnings,
+        })
+    }
+
+    /// Path sent in `SENDFILE_START`, built from the header rather than the user's file name:
+    /// the device never receives a file name over the protocol, only this path. On a confirmed
+    /// downgrade the major number is raised by 200 — a trick the user applied by hand in Caddx
+    /// PC Tool (file renamed before upload) to bypass its own name-based downgrade warning in
+    /// `JudgePerVersAndCurrVers`. We keep it only to stay consistent with the captures that
+    /// succeeded this way (17.5.8 → 16.5.9, 19.2.14 → 18.21.10); the device itself never reads
+    /// a file name, so this has no effect beyond matching what was already tested.
+    pub fn device_path(&self, change: Change) -> String {
+        let side = match self.kind {
+            ImageKind::Receiver => "Gnd",
+            _ => "Sky",
+        };
+        let major = match change {
+            Change::Downgrade => self.version.major + 200,
+            _ => self.version.major,
+        };
+        format!(
+            "/tmp/pc/Ascent_G_{side}_{major}_{}_{}.img",
+            self.version.minor, self.version.patch
+        )
     }
 }
 
@@ -182,18 +341,25 @@ pub(crate) mod tests {
         bytes
     }
 
-    fn device(name: &str) -> crate::DeviceInfo {
+    pub(crate) fn device(name: &str, firmware: &str) -> crate::DeviceInfo {
         crate::DeviceInfo {
             max_receive_size: 0,
             sdk_version: String::new(),
             device_name: name.into(),
             cpu_temp: 0,
-            firmware: "Ascent_G_Sky_16_5_9".into(),
+            firmware: firmware.into(),
             serial: String::new(),
             hardware: String::new(),
             status: 0,
             detail: String::new(),
         }
+    }
+
+    fn sample(name: &str) -> Option<Vec<u8>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../analyze/Walksnail/firmware")
+            .join(name);
+        std::fs::read(path).ok()
     }
 
     #[test]
@@ -223,30 +389,133 @@ pub(crate) mod tests {
         );
     }
 
+    // Real model names: GT Pro is a transmitter (firmware Sky), VRX is a receiver (Gnd).
+    const GT_PRO: &str = "Ascent_GT_pro";
+    const VRX: &str = "Ascent_VRX";
+
     #[test]
-    fn matches_images_to_device_names() {
+    fn checks_kind_by_content_not_by_name() {
         let sky = ImageInfo::parse(&header(4, "17_5_8")).unwrap();
         let gnd = ImageInfo::parse(&header(5, "17_5_8")).unwrap();
-        let transmitter = device("Ascent_GT_pro");
-        let receiver = device("Ascent_Gnd");
-        assert!(sky.matches(&transmitter));
-        assert!(!gnd.matches(&transmitter));
-        assert!(gnd.matches(&receiver));
-        assert!(!sky.matches(&receiver));
+        let transmitter = device(GT_PRO, "Ascent_G_Sky_16_5_9");
+        let receiver = device(VRX, "Ascent_G_Gnd_16_5_9");
+        assert!(sky.assess(&transmitter).is_ok());
+        assert!(matches!(
+            gnd.assess(&transmitter),
+            Err(Refusal::WrongKind { .. })
+        ));
+        assert!(gnd.assess(&receiver).is_ok());
+        assert!(matches!(
+            sky.assess(&receiver),
+            Err(Refusal::WrongKind { .. })
+        ));
+        let unknown = device("new device", "unknown");
+        assert!(matches!(
+            sky.assess(&unknown),
+            Err(Refusal::WrongKind { .. })
+        ));
     }
 
     #[test]
-    fn refuses_old_and_downgrade_versions() {
-        let old = ImageInfo::parse(&header(4, "16_4_3")).unwrap();
-        assert!(old.is_flashable(None).is_err(), "ниже 16_4_4");
+    fn classifies_upgrade_reinstall_and_downgrade() {
+        let on_17 = device(GT_PRO, "Ascent_G_Sky_17_5_8");
+        let assess = |version: &str| {
+            ImageInfo::parse(&header(4, version))
+                .unwrap()
+                .assess(&on_17)
+        };
+        assert_eq!(assess("19_2_14").unwrap().change, Change::Upgrade);
+        assert_eq!(assess("17_5_8").unwrap().change, Change::Reinstall);
+        let down = assess("16_5_9").unwrap();
+        assert_eq!(
+            down.change,
+            Change::Downgrade,
+            "понижение разрешено, но помечено"
+        );
+        assert!(down.warnings.iter().any(|w| w.contains("понижение")));
+        assert!(matches!(
+            assess("16_4_3"),
+            Err(Refusal::BelowMinimum { .. })
+        ));
+    }
 
-        let current = Version::parse("17_5_8").unwrap();
-        let same = ImageInfo::parse(&header(4, "17_5_8")).unwrap();
-        assert!(same.is_flashable(Some(current)).is_err(), "та же версия");
+    #[test]
+    fn warns_about_downgrading_from_the_18_layout() {
+        let on_18 = device(GT_PRO, "Ascent_G_Sky_18_21_10");
+        let down = ImageInfo::parse(&header(4, "17_5_8"))
+            .unwrap()
+            .assess(&on_18)
+            .unwrap();
+        assert!(down.warnings.iter().any(|w| w.contains("image type error")));
+        let on_19 = device(GT_PRO, "Ascent_G_Sky_19_2_14");
+        let within = ImageInfo::parse(&header(4, "18_21_10"))
+            .unwrap()
+            .assess(&on_19)
+            .unwrap();
+        assert!(
+            !within
+                .warnings
+                .iter()
+                .any(|w| w.contains("image type error"))
+        );
+    }
 
-        let newer = ImageInfo::parse(&header(4, "18_21_10")).unwrap();
-        assert!(newer.is_flashable(Some(current)).is_ok());
-        assert!(newer.is_flashable(None).is_ok());
+    #[test]
+    fn device_path_is_built_from_the_header() {
+        let image = ImageInfo::parse(&header(4, "16_5_9")).unwrap();
+        assert_eq!(
+            image.device_path(Change::Upgrade),
+            "/tmp/pc/Ascent_G_Sky_16_5_9.img"
+        );
+        assert_eq!(
+            image.device_path(Change::Downgrade),
+            "/tmp/pc/Ascent_G_Sky_216_5_9.img",
+            "как в успешном дампе 17.5.8 → 16.5.9"
+        );
+        let gnd = ImageInfo::parse(&header(5, "19_2_14")).unwrap();
+        assert_eq!(
+            gnd.device_path(Change::Reinstall),
+            "/tmp/pc/Ascent_G_Gnd_19_2_14.img"
+        );
+    }
+
+    #[test]
+    fn verifies_the_stored_checksum_of_real_images() {
+        let expectations = [
+            ("Ascent_G_Sky_16_5_9.img", Integrity::NotRecorded),
+            ("Ascent_G_Sky_17_5_8.img", Integrity::Verified),
+            ("Ascent_G_Sky_18_21_10.img", Integrity::Verified),
+            ("Ascent_G_Sky_19_2_14.img", Integrity::Verified),
+            ("Ascent_G_Gnd_19_2_14.img", Integrity::NotRecorded),
+        ];
+        for (name, integrity) in expectations {
+            let Some(bytes) = sample(name) else { return };
+            let info = ImageInfo::parse(&bytes).unwrap();
+            assert_eq!(info.integrity, integrity, "{name}");
+            assert!(
+                name.contains(&info.version.to_string()),
+                "{name}: версия из заголовка"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_damaged_and_truncated_real_images() {
+        let Some(mut bytes) = sample("Ascent_G_Sky_19_2_14.img") else {
+            return;
+        };
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0x01;
+        assert!(matches!(
+            ImageInfo::parse(&bytes),
+            Err(ImageError::BadCrc { .. })
+        ));
+        bytes[middle] ^= 0x01;
+        bytes.truncate(bytes.len() - 1);
+        assert!(matches!(
+            ImageInfo::parse(&bytes),
+            Err(ImageError::SizeMismatch { .. })
+        ));
     }
 
     #[test]

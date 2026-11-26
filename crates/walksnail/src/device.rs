@@ -19,6 +19,13 @@ pub struct DeviceInfo {
 
 pub const PAYLOAD_LEN: usize = 300;
 
+/// Transmitter (GT Pro, GT Max, Lite: firmware `Ascent_G_Sky_…`) or receiver (VRX family).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Transmitter,
+    Receiver,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeviceInfoError {
     TooShort { got: usize },
@@ -76,6 +83,33 @@ impl DeviceInfo {
             "{} | прошивка {} | железо {} | SN {} | {} °C",
             self.device_name, self.firmware, self.hardware, self.serial, self.cpu_temp
         )
+    }
+
+    /// Which side of the link the device is. The firmware tag (`Ascent_G_Sky_…` on GT/Lite
+    /// transmitters, `…_Gnd_…` on VRX receivers) decides; the model name is a cross-check.
+    /// Returns `None` when the two disagree or neither is recognised.
+    pub fn side(&self) -> Option<Side> {
+        let firmware = self.firmware.to_ascii_lowercase();
+        let by_firmware = if firmware.contains("_sky_") {
+            Some(Side::Transmitter)
+        } else if firmware.contains("_gnd_") {
+            Some(Side::Receiver)
+        } else {
+            None
+        };
+        let name = self.device_name.to_ascii_lowercase();
+        let by_name = if name.contains("vrx") {
+            Some(Side::Receiver)
+        } else if name.contains("_gt") || name.contains("lite") {
+            Some(Side::Transmitter)
+        } else {
+            None
+        };
+        match (by_firmware, by_name) {
+            (Some(a), Some(b)) if a != b => None,
+            (Some(side), _) | (None, Some(side)) => Some(side),
+            (None, None) => None,
+        }
     }
 
     /// The trailing `NN_NN_NN` of the firmware name, which a firmware file must match.
@@ -154,6 +188,31 @@ mod tests {
         assert_eq!(info.firmware_version(), None);
         info.firmware = "Ascent_G_Sky_beta_1_2".into();
         assert_eq!(info.firmware_version(), None, "нечисловая часть не версия");
+    }
+
+    #[test]
+    fn decides_the_side_from_firmware_and_model() {
+        let mut info = DeviceInfo::parse(&from_hex(PAYLOAD)).unwrap();
+        assert_eq!(
+            info.side(),
+            Some(Side::Transmitter),
+            "GT Pro с прошивкой Sky"
+        );
+
+        info.device_name = "Ascent_VRX_Pro".into();
+        info.firmware = "Ascent_G_Gnd_19_2_14".into();
+        assert_eq!(info.side(), Some(Side::Receiver));
+
+        info.firmware = "Ascent_G_Sky_19_2_14".into();
+        assert_eq!(
+            info.side(),
+            None,
+            "модель VRX с прошивкой Sky — противоречие"
+        );
+
+        info.device_name = "new device".into();
+        info.firmware = "unknown".into();
+        assert_eq!(info.side(), None);
     }
 
     #[test]

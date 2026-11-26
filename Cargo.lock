@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "fpv-core"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "chrono",
  "nusb",
@@ -189,11 +189,11 @@ dependencies = [
 
 [[package]]
 name = "fpv-fc"
-version = "3.1.0"
+version = "3.1.1"
 
 [[package]]
 name = "fpv-flasher"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "fpv-core",
  "fpv-fc",
@@ -203,11 +203,11 @@ dependencies = [
 
 [[package]]
 name = "fpv-radio"
-version = "3.1.0"
+version = "3.1.1"
 
 [[package]]
 name = "fpv-walksnail"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "md-5",
 ]
@@ -856,7 +856,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "xtask"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "sha2",
  "zip",

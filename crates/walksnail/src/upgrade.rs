@@ -8,7 +8,7 @@ use std::fmt;
 use crate::{
     device::DeviceInfo,
     frame::{ArCommand, Frame},
-    image::{ImageInfo, Version},
+    image::{Assessment, Change, ImageInfo},
 };
 
 /// Payload chunk size that Caddx uses for `SENDFILE_DATA`.
@@ -139,8 +139,9 @@ pub fn chunks(image: &[u8]) -> Vec<(usize, &[u8])> {
 }
 
 /// Full upgrade plan, in the order observed in the capture. After every step the caller
-/// must wait for an ACK with the same `seq`.
-pub fn plan(image: &[u8]) -> Vec<Step> {
+/// must wait for an ACK with the same `seq`. `device_path` comes from
+/// [`ImageInfo::device_path`], never from the user's file name.
+pub fn plan(image: &[u8], device_path: &str) -> Vec<Step> {
     let mut steps = Vec::new();
     let mut seq = 0_u32;
     let mut push = |step: Step, seq: &mut u32| {
@@ -153,7 +154,7 @@ pub fn plan(image: &[u8]) -> Vec<Step> {
     push(
         Step::SendFileStart {
             seq,
-            info: file_info_payload(image, "/tmp/pc/update.img"),
+            info: file_info_payload(image, device_path),
         },
         &mut seq,
     );
@@ -234,16 +235,24 @@ fn status_text(status: u32) -> String {
     }
 }
 
-/// Checks that must pass before anything is written to a device.
-pub fn preflight(image: &ImageInfo, device: &DeviceInfo) -> Result<(), String> {
-    if !image.matches(device) {
+/// Checks that must pass before anything is written to a device. A downgrade is returned as
+/// [`Change::Downgrade`] and must be confirmed explicitly; without `allow_downgrade` it is
+/// refused.
+pub fn preflight(
+    image: &ImageInfo,
+    device: &DeviceInfo,
+    allow_downgrade: bool,
+) -> Result<Assessment, String> {
+    let assessment = image
+        .assess(device)
+        .map_err(|refusal| refusal.to_string())?;
+    if assessment.change == Change::Downgrade && !allow_downgrade {
         return Err(format!(
-            "образ для «{}» не подходит устройству «{}»",
-            image.kind, device.device_name
+            "образ {} старше установленной {}: понижение нужно подтвердить явно",
+            image.version, assessment.current
         ));
     }
-    let current = device.firmware_version().and_then(Version::parse);
-    image.is_flashable(current)
+    Ok(assessment)
 }
 
 #[cfg(test)]
@@ -253,7 +262,7 @@ mod tests {
     #[test]
     fn plan_follows_the_captured_order() {
         let image = vec![7_u8; 100];
-        let steps = plan(&image);
+        let steps = plan(&image, "/tmp/pc/Ascent_G_Sky_19_2_14.img");
         assert_eq!(steps[0].frame().command.code(), 0x3C, "сначала FIND_DEVICE");
         assert_eq!(steps[1].frame().command.code(), 0x03, "затем REBOOT");
         assert_eq!(
@@ -394,25 +403,48 @@ mod tests {
     }
 
     #[test]
-    fn preflight_refuses_wrong_kind_and_downgrades() {
-        let device = crate::DeviceInfo {
-            max_receive_size: 0,
-            sdk_version: String::new(),
-            device_name: "Ascent_GT_pro".into(),
-            cpu_temp: 0,
-            firmware: "Ascent_G_Sky_17_5_8".into(),
-            serial: String::new(),
-            hardware: String::new(),
-            status: 0,
-            detail: String::new(),
+    fn preflight_requires_explicit_consent_for_a_downgrade() {
+        use crate::image::tests::{device, header};
+        let gt_pro = device("Ascent_GT_pro", "Ascent_G_Sky_17_5_8");
+
+        let newer = ImageInfo::parse(&header(4, "19_2_14")).unwrap();
+        assert_eq!(
+            preflight(&newer, &gt_pro, false).unwrap().change,
+            Change::Upgrade
+        );
+
+        let same = ImageInfo::parse(&header(4, "17_5_8")).unwrap();
+        assert_eq!(
+            preflight(&same, &gt_pro, false).unwrap().change,
+            Change::Reinstall
+        );
+
+        let older = ImageInfo::parse(&header(4, "16_5_9")).unwrap();
+        assert!(preflight(&older, &gt_pro, false).is_err(), "без согласия");
+        let confirmed = preflight(&older, &gt_pro, true).unwrap();
+        assert_eq!(confirmed.change, Change::Downgrade);
+        assert_eq!(
+            older.device_path(confirmed.change),
+            "/tmp/pc/Ascent_G_Sky_216_5_9.img"
+        );
+
+        let receiver_image = ImageInfo::parse(&header(5, "19_2_14")).unwrap();
+        assert!(
+            preflight(&receiver_image, &gt_pro, true).is_err(),
+            "образ приёмника"
+        );
+    }
+
+    #[test]
+    fn renamed_file_does_not_change_what_is_sent() {
+        // The user may name the file anything; the device path comes only from the header.
+        use crate::image::tests::header;
+        let image = ImageInfo::parse(&header(4, "18_21_10")).unwrap();
+        let steps = plan(b"payload", &image.device_path(Change::Upgrade));
+        let Step::SendFileStart { info, .. } = &steps[3] else {
+            panic!("ожидался SENDFILE_START");
         };
-        let newer = ImageInfo::parse(&crate::image::tests::header(4, "19_2_14")).unwrap();
-        assert!(preflight(&newer, &device).is_ok());
-
-        let same = ImageInfo::parse(&crate::image::tests::header(4, "17_5_8")).unwrap();
-        assert!(preflight(&same, &device).is_err(), "понижение запрещено");
-
-        let receiver = ImageInfo::parse(&crate::image::tests::header(5, "19_2_14")).unwrap();
-        assert!(preflight(&receiver, &device).is_err(), "образ приёмника");
+        let path = String::from_utf8_lossy(&info[72..200]);
+        assert!(path.starts_with("/tmp/pc/Ascent_G_Sky_18_21_10.img"));
     }
 }

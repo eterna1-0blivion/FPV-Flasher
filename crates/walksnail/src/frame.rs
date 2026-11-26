@@ -152,20 +152,37 @@ impl fmt::Display for FrameError {
 
 impl std::error::Error for FrameError {}
 
-/// CRC32 as implemented by Caddx: reflected IEEE polynomial, init and final XOR of all ones.
-pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for &byte in data {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
+const CRC_TABLE: [u32; 256] = {
+    let mut table = [0_u32; 256];
+    let mut index = 0;
+    while index < 256 {
+        let mut crc = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
             crc = if crc & 1 == 1 {
                 (crc >> 1) ^ 0xEDB8_8320
             } else {
                 crc >> 1
             };
+            bit += 1;
         }
+        table[index] = crc;
+        index += 1;
     }
-    crc ^ u32::MAX
+    table
+};
+
+fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+    for &byte in data {
+        crc = CRC_TABLE[((crc ^ u32::from(byte)) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc
+}
+
+/// CRC32 as implemented by Caddx: reflected IEEE polynomial, init and final XOR of all ones.
+/// Table driven, because it also checks whole 50 MB images.
+pub fn crc32(data: &[u8]) -> u32 {
+    crc32_update(u32::MAX, data) ^ u32::MAX
 }
 
 fn put_u16(buffer: &mut [u8], offset: usize, value: u16) {
