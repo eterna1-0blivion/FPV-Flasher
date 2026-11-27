@@ -1,4 +1,4 @@
-//! Walksnail Ascent protocol (AR). See `docs/protocols/walksnail-ar.md`.
+//! Протокол Walksnail Ascent (AR). Описание — в `docs/protocols/walksnail-ar.md`.
 
 pub mod device;
 pub mod frame;

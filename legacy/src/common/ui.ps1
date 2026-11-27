@@ -16,7 +16,7 @@ function Show-Message {
     )
 
     if ($Level -ne "None") {
-        # Text labels remain meaningful even in hosts that render console colors poorly.
+        # Текстовые метки остаются понятными даже там, где цвета консоли отображаются плохо.
         $labels = @{
             Success    = "[УСПЕХ]"
             Status     = "[СТАТУС]"

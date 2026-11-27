@@ -97,7 +97,7 @@ struct Entry {
     path: String,
 }
 
-/// Parse `sha256sum` output: 64 hex characters, two spaces, a relative path.
+/// Разбирает вывод `sha256sum`: 64 hex-символа, два пробела, относительный путь.
 fn parse_manifest(text: &str) -> Result<Vec<Entry>, Box<dyn std::error::Error>> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
@@ -119,7 +119,7 @@ fn parse_manifest(text: &str) -> Result<Vec<Entry>, Box<dyn std::error::Error>> 
         .collect()
 }
 
-/// Paths in the manifest must stay inside `vendor/` on any platform resolved by the builder.
+/// Отсекает абсолютные пути и компоненты `..` до обращения к файлам.
 fn is_relative_path(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with(['/', '\\'])

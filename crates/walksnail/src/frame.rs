@@ -1,4 +1,4 @@
-//! Frame layout for the Walksnail AR protocol: 36-byte header, payload, CRC32.
+//! Кадр протокола AR: заголовок 36 байт, payload и CRC32.
 
 use std::fmt;
 
@@ -10,7 +10,7 @@ pub const HEADER_LEN: usize = 36;
 pub const TYPE_REQUEST: u16 = 1;
 pub const TYPE_ACK: u16 = 2;
 
-/// Commands observed in captures and confirmed in the Caddx command table.
+/// Команды, встреченные в дампах и подтверждённые таблицей команд Caddx.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArCommand {
     Reboot,
@@ -63,7 +63,7 @@ impl ArCommand {
     }
 }
 
-/// Request type (first byte of the `type` field) as seen in captures.
+/// Направление кадра: запрос от ПК или ответ (ACK) от устройства.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Request,
@@ -179,8 +179,8 @@ fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
     crc
 }
 
-/// CRC32 as implemented by Caddx: reflected IEEE polynomial, init and final XOR of all ones.
-/// Table driven, because it also checks whole 50 MB images.
+/// Табличный CRC32 с отражённым полиномом IEEE.
+/// Начальное значение и финальный XOR — `0xFFFFFFFF`.
 pub fn crc32(data: &[u8]) -> u32 {
     crc32_update(u32::MAX, data) ^ u32::MAX
 }
@@ -206,15 +206,14 @@ fn get_u32(buffer: &[u8], offset: usize) -> u32 {
     ])
 }
 
-/// A decoded frame. `payload` is borrowed only when the caller keeps the buffer alive;
-/// building always allocates because the CRC covers header and payload together.
+/// Разобранный кадр владеет полезной нагрузкой и не зависит от исходного буфера.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub version: u16,
     pub kind: Kind,
     pub msgid: u16,
-    /// Request frames use `0xABCD`, ACK frames from the device carry `0`. Preserved verbatim
-    /// so that re-encoding a captured frame reproduces it byte for byte.
+    /// В запросах `0xABCD`, в ответах устройства `0`. Храним как есть, чтобы
+    /// пересборка снятого кадра совпадала с оригиналом побайтно.
     pub unused: u16,
     pub command: Command,
     pub format: u16,
@@ -248,7 +247,7 @@ impl Frame {
         }
     }
 
-    /// Serialise the header with a zeroed CRC field, then append the payload.
+    /// Собирает заголовок и данные, затем записывает CRC32 в заголовок.
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = vec![0_u8; HEADER_LEN + self.payload.len()];
         put_u32(&mut bytes, 0, MAGIC);
@@ -276,13 +275,13 @@ impl Frame {
         bytes
     }
 
-    /// Parse a frame captured from the device. The CRC covers the header with its own field
-    /// zeroed plus exactly `length` payload bytes.
+    /// Разбирает кадр, снятый с устройства. CRC покрывает заголовок с обнулённым
+    /// собственным полем плюс ровно `length` байт payload.
     pub fn decode(bytes: &[u8]) -> Result<Self, FrameError> {
         Self::decode_allow_trailing(bytes, false)
     }
 
-    /// Parser for stream buffers where several frames may follow each other.
+    /// Разбор буфера потока, где друг за другом могут идти несколько кадров.
     pub fn decode_allow_trailing(bytes: &[u8], allow_trailing: bool) -> Result<Self, FrameError> {
         if bytes.len() < HEADER_LEN {
             return Err(FrameError::TooShort { got: bytes.len() });
@@ -362,7 +361,7 @@ mod tests {
             .collect()
     }
 
-    // Real bytes captured on an Ascent GT with Caddx PC Tool 2.2.8.
+    // Реальные байты, снятые с Ascent GT через Caddx PC Tool 2.2.8.
     const FIND_DEVICE_REQUEST: &str =
         "4f545241dc0c01000000cdab3c00000002000000000000000000000000000000d1dd63d1";
     const REBOOT_CLEAN: &str =
@@ -417,7 +416,7 @@ mod tests {
     #[test]
     fn reboot_clean_carries_the_mode() {
         let mut bytes = from_hex(REBOOT_CLEAN);
-        // The device receives the payload in a separate write as a 32-byte fixed field.
+        // Устройство получает payload отдельной записью, фиксированным блоком на 32 байта.
         bytes.extend_from_slice(b"clean\0\0\0");
         bytes.resize(HEADER_LEN + 32, 0);
         let frame = Frame::decode(&bytes).unwrap();
@@ -442,7 +441,7 @@ mod tests {
             FrameError::TooShort { got: 10 }
         );
 
-        // The device trusts `length`; we refuse a frame that claims far more data than present.
+        // Заявленная длина превышает размер буфера: кадр должен быть отклонён.
         let mut lying = bytes.clone();
         put_u32(&mut lying, 20, 1_079_918_686);
         assert!(matches!(

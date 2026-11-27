@@ -1,12 +1,12 @@
-//! Walksnail firmware container (`*.img`).
+//! Контейнер прошивки Walksnail (`*.img`).
 //!
-//! Header confirmed on all eight sample images: `41 53 57 00` ("ASW\0"), then `u32` type
-//! (4 = transmitter / Sky, 5 = receiver / Gnd), then `u32` major, `u32` minor, `u32` patch.
+//! Заголовок проверен на всех восьми образцах: `41 53 57 00` («ASW\0»), затем `u32` тип
+//! (4 — передатчик Sky, 5 — приёмник Gnd), затем `u32` major, `u32` minor, `u32` patch.
 
 use std::fmt;
 
 pub const MAGIC: [u8; 4] = *b"ASW\0";
-/// Signature, type and three version numbers.
+/// Сигнатура, тип и три числа версии.
 pub const HEADER_LEN: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +58,8 @@ impl fmt::Display for Version {
 }
 
 impl Version {
-    /// Minimum version accepted by Caddx PC Tool; older images are refused before flashing.
+    /// Минимальная версия, которую принимает Caddx PC Tool; более старые образы
+    /// отклоняются ещё до прошивки. Причину порога мы не подтвердили (см. документацию).
     pub const MINIMUM: Self = Self {
         major: 16,
         minor: 4,
@@ -81,18 +82,18 @@ impl Version {
     }
 }
 
-/// Transmitter images carry the file size at this offset and the CRC32 of everything from
-/// [`BODY_START`] to the end of the file in the four bytes before it. 16_5_9 leaves the CRC at 0.
+/// В образах передатчика по этому смещению лежит размер файла, а в четырёх байтах перед ним —
+/// CRC32 всего тела начиная с [`BODY_START`]. У 16_5_9 контрольная сумма нулевая.
 const SKY_CRC_OFFSET: usize = 112;
 const SKY_SIZE_OFFSET: usize = 116;
 const BODY_START: usize = 0x80;
 
-/// Result of the integrity check stored in the image itself.
+/// Результат проверки целостности, записанной в самом образе.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Integrity {
-    /// The stored CRC32 matches the body.
+    /// CRC32 в образе совпал с содержимым.
     Verified,
-    /// The image has no stored CRC (seen on 16_5_9 and on receiver images).
+    /// Контрольная сумма в образе не записана (так у 16_5_9 и у приёмников).
     NotRecorded,
 }
 
@@ -133,7 +134,7 @@ impl fmt::Display for ImageError {
     }
 }
 
-/// Why an image must not be written, or what the user has to confirm first.
+/// Причина отказа писать образ либо то, что пользователь обязан подтвердить.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     WrongKind { image: ImageKind, device: String },
@@ -165,12 +166,12 @@ impl fmt::Display for Refusal {
     }
 }
 
-/// Direction of the change, decided from the image content and the device answer only.
+/// Направление изменения — определяется только по содержимому образа и ответу устройства.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
     Upgrade,
     Reinstall,
-    /// Allowed only when the caller passes `allow_downgrade`.
+    /// Разрешено, только если вызывающий код передал `allow_downgrade`.
     Downgrade,
 }
 
@@ -185,7 +186,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     ])
 }
 
-/// What the checks decided, plus warnings the user has to see before confirming.
+/// Результат проверок вместе с предупреждениями, которые нужно показать перед подтверждением.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Assessment {
     pub change: Change,
@@ -193,10 +194,8 @@ pub struct Assessment {
     pub warnings: Vec<String>,
 }
 
-/// Every captured attempt to flash a pre-18.x image onto a device running 18.x (or the other
-/// way round) failed with status -8 ("image type error"); 18.x images also mark two more
-/// section records with a flag the earlier versions do not set. We only use this to warn
-/// before a downgrade, not to block it outright.
+/// Граница для предупреждения: в захватах переход с 18.21.10 на 16.x или 17.x
+/// завершался кодом −8. Причина отказа пока не установлена.
 const NEW_LAYOUT_SINCE: Version = Version {
     major: 18,
     minor: 0,
@@ -204,7 +203,7 @@ const NEW_LAYOUT_SINCE: Version = Version {
 };
 
 impl ImageInfo {
-    /// Read type, version and integrity from the file content. The file name is never used.
+    /// Читает тип, версию и целостность из содержимого файла. Имя файла не используется.
     pub fn parse(bytes: &[u8]) -> Result<Self, ImageError> {
         if bytes.len() < HEADER_LEN {
             return Err(ImageError::TooShort { got: bytes.len() });
@@ -243,8 +242,8 @@ impl ImageInfo {
         })
     }
 
-    /// Decide what writing this image would do. Downgrades are not refused here: the caller
-    /// must show `warnings` and get an explicit confirmation before flashing.
+    /// Определяет, что произойдёт при записи. Понижение здесь не отклоняется:
+    /// вызывающий код обязан показать `warnings` и получить явное подтверждение.
     pub fn assess(&self, device: &crate::DeviceInfo) -> Result<Assessment, Refusal> {
         let kind_ok = matches!(
             (self.kind, device.side()),
@@ -303,13 +302,9 @@ impl ImageInfo {
         })
     }
 
-    /// Path sent in `SENDFILE_START`, built from the header rather than the user's file name:
-    /// the device never receives a file name over the protocol, only this path. On a confirmed
-    /// downgrade the major number is raised by 200 — a trick the user applied by hand in Caddx
-    /// PC Tool (file renamed before upload) to bypass its own name-based downgrade warning in
-    /// `JudgePerVersAndCurrVers`. We keep it only to stay consistent with the captures that
-    /// succeeded this way (17.5.8 → 16.5.9, 19.2.14 → 18.21.10); the device itself never reads
-    /// a file name, so this has no effect beyond matching what was already tested.
+    /// Путь для `SENDFILE_START` строится из заголовка, а не из локального имени файла.
+    /// При понижении `+200` воспроизводит имя из успешных захватов с ручным
+    /// переименованием. Влияние имени на проверки устройства не установлено.
     pub fn device_path(&self, change: Change) -> String {
         let side = match self.kind {
             ImageKind::Receiver => "Gnd",
@@ -389,7 +384,7 @@ pub(crate) mod tests {
         );
     }
 
-    // Real model names: GT Pro is a transmitter (firmware Sky), VRX is a receiver (Gnd).
+    // Реальные имена моделей: GT Pro — передатчик (прошивка Sky), VRX — приёмник (Gnd).
     const GT_PRO: &str = "Ascent_GT_pro";
     const VRX: &str = "Ascent_VRX";
 

@@ -5,7 +5,8 @@ use std::{
 
 use crate::ports::{PortInfo, UsbId, list_ports};
 
-/// Poll interval chosen to beat the fixed 10-second waits used by Caddx PC Tool.
+/// Интервал опроса: 200 мс, чтобы устройство находилось заметно быстрее, чем при
+/// фиксированных десятисекундных паузах из Caddx PC Tool.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 pub fn find_by_usb(vid: u16, pid: u16) -> Result<Option<PortInfo>, serialport::Error> {
@@ -14,7 +15,7 @@ pub fn find_by_usb(vid: u16, pid: u16) -> Result<Option<PortInfo>, serialport::E
         .find(|port| port.usb == Some((UsbId::new(vid), UsbId::new(pid)))))
 }
 
-/// Wait until a device with the given VID:PID reports a COM port.
+/// Ждёт, пока устройство с указанным VID:PID появится как COM-порт.
 pub fn wait_until_present(
     vid: u16,
     pid: u16,
@@ -23,7 +24,7 @@ pub fn wait_until_present(
     wait_for(POLL_INTERVAL, timeout, || find_by_usb(vid, pid))
 }
 
-/// Wait until the device stops reporting a COM port, for example while it reboots.
+/// Ждёт, пока устройство перестанет быть COM-портом, например на время перезагрузки.
 pub fn wait_until_absent(vid: u16, pid: u16, timeout: Duration) -> Result<bool, serialport::Error> {
     let deadline = Instant::now() + timeout;
     loop {

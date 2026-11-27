@@ -1,6 +1,7 @@
 use crate::ports::PortInfo;
 
-/// One device class we recognise. `vids` is a list because a vendor may ship several revisions.
+/// Описание класса устройств: набор VID/PID, по которым мы узнаём оборудование.
+/// `vids` и `pids` — списки, потому что одно семейство может иметь несколько ревизий.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceKind {
     pub id: &'static str,
@@ -12,7 +13,7 @@ pub struct DeviceKind {
 impl DeviceKind {
     pub fn matches(&self, port: &PortInfo) -> bool {
         match port.usb {
-            // An empty PID list means the vendor ID alone is enough to recognise the device.
+            // Пустой список PID означает, что для опознания достаточно одного VID.
             Some((vid, pid)) => {
                 self.vids.contains(&vid.value())
                     && (self.pids.is_empty() || self.pids.contains(&pid.value()))
@@ -22,7 +23,8 @@ impl DeviceKind {
     }
 }
 
-/// Known FPV hardware. Values come from official documentation and from real devices.
+/// Известное оборудование FPV. Значения взяты из документации производителей
+/// и с реально подключённых устройств.
 pub const KNOWN_DEVICES: &[DeviceKind] = &[
     DeviceKind {
         id: "walksnail",
@@ -31,7 +33,7 @@ pub const KNOWN_DEVICES: &[DeviceKind] = &[
         pids: &[0x0101],
     },
     DeviceKind {
-        // WCH CH340/CH341 adapters: radio modules, and the Caddx GM V2 gimbal. PID varies by chip.
+        // Переходники WCH CH340/CH341: радиомодули и гимбал Caddx GM V2. PID зависит от чипа.
         id: "ch34x",
         title: "USB-UART CH34x (радиомодуль или гимбал Caddx GM V2)",
         vids: &[0x1A86],
@@ -45,14 +47,14 @@ pub const KNOWN_DEVICES: &[DeviceKind] = &[
     },
 ];
 
-/// STM32 ROM bootloader in DFU mode: raw USB, never a COM port.
+/// Загрузчик STM32 в режиме DFU — это «сырое» USB-устройство, а не COM-порт.
 pub const STM32_DFU: (u16, u16) = (0x0483, 0xDF11);
 
 pub fn identify(port: &PortInfo) -> Option<&'static DeviceKind> {
     KNOWN_DEVICES.iter().find(|kind| kind.matches(port))
 }
 
-/// Label a port for menus: recognised hardware, unknown USB, or plain port name.
+/// Подпись порта для меню: распознанное оборудование, неизвестное USB или просто имя порта.
 pub fn describe(port: &PortInfo) -> String {
     match identify(port) {
         Some(kind) => format!("{} — {}", port.display_name(), kind.title),

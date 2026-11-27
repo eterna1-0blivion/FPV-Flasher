@@ -1,6 +1,7 @@
 use std::fmt;
 
-/// USB identifiers are kept as four hex digits so they can be compared with Windows device IDs.
+/// Идентификатор USB хранится как `u16` и выводится четырьмя
+/// шестнадцатеричными цифрами, как в списке устройств.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct UsbId(u16);
 
@@ -26,7 +27,7 @@ impl fmt::Display for UsbId {
     }
 }
 
-/// A serial port plus the USB identifiers Windows reports for it.
+/// COM-порт вместе с VID/PID, которые для него сообщает Windows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PortInfo {
     pub name: String,
@@ -42,7 +43,7 @@ impl PortInfo {
     }
 }
 
-/// Enumerate ports without opening them: opening a port can reset attached hardware.
+/// Перечисляет порты, не открывая их: открытие порта может сбросить подключённое устройство.
 pub fn list_ports() -> Result<Vec<PortInfo>, serialport::Error> {
     let mut ports = serialport::available_ports()?
         .into_iter()
@@ -60,7 +61,7 @@ pub fn list_ports() -> Result<Vec<PortInfo>, serialport::Error> {
     Ok(ports)
 }
 
-/// Sort COM10 after COM9 instead of lexicographically.
+/// Сортирует COM10 после COM9, а не в лексикографическом порядке.
 fn port_number(name: &str) -> (u8, u32, String) {
     let digits: String = name.chars().filter(char::is_ascii_digit).collect();
     match digits.parse() {

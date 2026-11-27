@@ -1,6 +1,7 @@
 use std::{io, path::Path};
 
-/// Use a fixed shell command relative to a trusted working directory, not a path interpolated into CMD.
+/// Запускает legacy-меню фиксированной командой относительно доверенного рабочего каталога.
+/// Путь не подставляется в командную строку CMD, поэтому спецсимволы в пути не опасны.
 #[cfg(windows)]
 pub fn run_legacy(root: &Path) -> io::Result<()> {
     let status = std::process::Command::new("cmd.exe")

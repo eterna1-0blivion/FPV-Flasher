@@ -1,7 +1,8 @@
-/// Clear the visible screen before a redraw. Only emitted for a real terminal.
+/// Очистка экрана перед перерисовкой. Отправляется только в настоящий терминал.
 pub const CLEAR_SCREEN: &str = "\x1B[2J\x1B[H";
 
-/// Ask the Windows console to interpret ANSI sequences; it is off by default.
+/// Включает разбор ANSI-последовательностей в консоли Windows: по умолчанию он выключен,
+/// и без этого цвета и очистка экрана печатались бы как мусорные символы.
 #[cfg(windows)]
 pub fn enable_ansi() {
     use windows_sys::Win32::System::Console::{
@@ -9,7 +10,8 @@ pub fn enable_ansi() {
         SetConsoleMode,
     };
 
-    // SAFETY: the handle comes from the system, is only queried and set, and is not stored.
+    // БЕЗОПАСНОСТЬ: дескриптор получен от системы, мы его только читаем и меняем режим,
+    // нигде не сохраняем и не освобождаем.
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
         let mut mode = 0;

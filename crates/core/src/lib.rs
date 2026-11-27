@@ -10,7 +10,9 @@ pub mod ports;
 pub mod usb;
 pub mod wait;
 
-/// Locate an unpacked app or a local Cargo build without relying on the working directory.
+/// Находит корень приложения — распакованного архива или локальной сборки Cargo.
+/// Каталог определяется по расположению exe, а не по текущему каталогу: иначе запуск
+/// из другой папки (ярлык, сторонняя консоль) ломал бы поиск legacy-скриптов.
 pub fn find_app_root(executable: &Path) -> io::Result<PathBuf> {
     let find = || {
         let parent = executable.parent()?;

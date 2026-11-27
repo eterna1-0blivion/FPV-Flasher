@@ -6,13 +6,13 @@ use std::{
 
 use chrono::Local;
 
-/// Append-only session log next to the executable, keeping the console readable.
+/// Журнал сессии: новые записи дописываются в конец файла.
 pub struct SessionLog {
     file: Option<File>,
 }
 
 impl SessionLog {
-    /// Logging is best effort: a read-only folder must not stop flashing.
+    /// Журнал ведётся по возможности: каталог только для чтения не должен мешать прошивке.
     pub fn create(path: &Path) -> Self {
         let file = OpenOptions::new().create(true).append(true).open(path).ok();
         Self { file }
@@ -20,6 +20,11 @@ impl SessionLog {
 
     pub fn record(&mut self, message: &str) {
         println!("{message}");
+        self.append(message);
+    }
+
+    /// Записывает сообщение в файл без вывода на экран.
+    pub fn append(&mut self, message: &str) {
         if let Some(file) = self.file.as_mut() {
             let _ = writeln!(
                 file,

@@ -1,8 +1,9 @@
 use nusb::MaybeFuture;
 use std::fmt;
 
-/// DFU-capable bootloaders are raw USB devices, so `serialport` can never see them.
-/// Values come from ST (STM32) and Artery (AT32) documentation; AT32 boards appear in FPV hardware.
+/// Загрузчики с поддержкой DFU — это «сырые» USB-устройства, поэтому `serialport` их не видит
+/// в принципе. Значения из документации ST (STM32) и Artery (AT32); платы на AT32 в FPV тоже
+/// встречаются, поэтому ищем оба семейства.
 pub const DFU_TARGETS: &[(&str, u16, u16)] = &[
     ("STM32 DFU (STM32Cube bootloader)", 0x0483, 0xDF11),
     ("AT32 DFU (Artery bootloader)", 0x2E3C, 0xDF11),
@@ -48,7 +49,7 @@ fn title_for(vendor_id: u16, product_id: u16) -> Option<&'static str> {
         .map(|(title, _, _)| *title)
 }
 
-/// Enumerate USB devices and keep bootloaders that can accept a DFU transfer.
+/// Отбирает известные DFU-загрузчики по VID/PID, не открывая их.
 pub fn list_dfu_devices() -> Result<Vec<DfuDevice>, nusb::Error> {
     let mut found = Vec::new();
     for device in nusb::list_devices().wait()? {

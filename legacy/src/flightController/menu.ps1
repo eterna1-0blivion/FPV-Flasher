@@ -17,7 +17,7 @@ function Show-FlightControllerMenu {
     4. Управление режимом DFU (Вход / Выход)
     5. Помощник исправления драйверов (ImpulseRC)
 
-    0. Вернуться в главное меню
+    0. Закрыть раздел STM32
 "@ -Color "White"
 
         $choice = Show-Message -Message "Выбери действие [0-5]: " -Input Choice -NewLine

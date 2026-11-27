@@ -31,7 +31,8 @@ fn parse(line: &str) -> Action {
     }
 }
 
-/// Colour is applied only for a real terminal, so redirected output and pipes stay plain.
+/// Цвет включаем только для настоящего терминала: перенаправленный вывод и пайпы
+/// должны оставаться чистым текстом, без ANSI-последовательностей.
 struct Style {
     enabled: bool,
 }
@@ -46,7 +47,7 @@ impl Style {
     }
 }
 
-/// Connected hardware: COM ports with a recognised type, plus DFU bootloaders.
+/// Подключённое оборудование: COM-порты с распознанным типом и DFU-загрузчики.
 fn describe_devices() -> Vec<String> {
     let mut lines = Vec::new();
     match ports::list_ports() {
@@ -68,11 +69,29 @@ fn describe_devices() -> Vec<String> {
     lines
 }
 
+/// Пауза в терминале не даёт следующей перерисовке сразу стереть сообщение.
+/// При перенаправлении ввода не забираем следующую команду меню.
+fn show_notice(
+    output: &mut impl Write,
+    input: &mut impl BufRead,
+    message: &str,
+    interactive: bool,
+) -> io::Result<()> {
+    writeln!(output, "\n{message}")?;
+    if interactive {
+        write!(output, "\nНажмите Enter, чтобы вернуться в меню... ")?;
+        output.flush()?;
+        input.read_line(&mut String::new())?;
+    }
+    Ok(())
+}
+
 fn run_menu(
     mut input: impl BufRead,
     output: &mut impl Write,
     log: &mut SessionLog,
     is_terminal: bool,
+    mut describe_devices: impl FnMut() -> Vec<String>,
     mut run_fc: impl FnMut() -> io::Result<()>,
 ) -> io::Result<()> {
     let style = Style {
@@ -114,9 +133,15 @@ fn run_menu(
                     log.record_error(&format!("Полётные контроллеры: {error}"));
                 }
             }
-            Action::Radio => log.record(fpv_radio::STATUS),
-            Action::Walksnail => log.record(fpv_walksnail::STATUS),
-            Action::Unknown => log.record("Выберите пункт от 0 до 3."),
+            action => {
+                let message = match action {
+                    Action::Radio => fpv_radio::STATUS,
+                    Action::Walksnail => fpv_walksnail::STATUS,
+                    _ => "Выберите пункт от 0 до 3.",
+                };
+                log.append(message);
+                show_notice(output, &mut input, message, is_terminal)?;
+            }
         }
     }
 }
@@ -162,6 +187,7 @@ fn main() -> ExitCode {
         &mut io::stdout(),
         &mut log,
         interactive,
+        describe_devices,
         || {
             if !interactive {
                 return Err(io::Error::other(
@@ -213,6 +239,7 @@ mod tests {
             &mut output,
             &mut log,
             false,
+            Vec::new,
             || {
                 launched += 1;
                 Err(io::Error::other("test failure"))
@@ -223,6 +250,9 @@ mod tests {
         let screen = String::from_utf8(output).unwrap();
         let menu_count = screen.matches("FPV-Flasher").count();
         assert_eq!(menu_count, 5, "меню печатается до каждого чтения ввода");
+        assert_eq!(screen.matches(fpv_radio::STATUS).count(), 1);
+        assert_eq!(screen.matches(fpv_walksnail::STATUS).count(), 1);
+        assert!(!screen.contains("Нажмите Enter"));
         assert!(
             !screen.contains("\x1B[2J"),
             "неинтерактивный вывод не должен содержать управляющих последовательностей"
@@ -243,7 +273,7 @@ mod tests {
     #[test]
     fn exits_on_eof_without_running_legacy() {
         let (mut log, path) = temporary_log("eof");
-        run_menu(&b""[..], &mut io::sink(), &mut log, true, || {
+        run_menu(&b""[..], &mut io::sink(), &mut log, true, Vec::new, || {
             panic!("unexpected launch")
         })
         .unwrap();
@@ -254,9 +284,43 @@ mod tests {
     fn clears_the_screen_only_for_a_terminal() {
         let (mut log, path) = temporary_log("clear");
         let mut output = Vec::new();
-        run_menu(&b"0\n"[..], &mut output, &mut log, true, || Ok(())).unwrap();
+        run_menu(
+            &b"0\n"[..],
+            &mut output,
+            &mut log,
+            true,
+            Vec::new,
+            || Ok(()),
+        )
+        .unwrap();
         let screen = String::from_utf8(output).unwrap();
         assert!(screen.starts_with(console::CLEAR_SCREEN));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn stub_waits_for_enter_before_the_next_redraw() {
+        // Регрессия: раньше заглушка печаталась и сразу стиралась следующей перерисовкой,
+        // и пользователь не успевал прочитать текст.
+        let (mut log, path) = temporary_log("wait");
+        let mut output = Vec::new();
+        run_menu(
+            &b"2\n\n0\n"[..],
+            &mut output,
+            &mut log,
+            true,
+            Vec::new,
+            || panic!("unexpected launch"),
+        )
+        .unwrap();
+        let screen = String::from_utf8(output).unwrap();
+        let status_at = screen.find(fpv_radio::STATUS).expect("сообщение на экране");
+        let prompt_at = screen.find("Нажмите Enter").expect("запрос подтверждения");
+        assert!(status_at < prompt_at, "сначала текст, затем запрос Enter");
+        assert!(
+            screen[prompt_at..].contains("FPV-Flasher"),
+            "меню перерисовывается только после подтверждения"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 }

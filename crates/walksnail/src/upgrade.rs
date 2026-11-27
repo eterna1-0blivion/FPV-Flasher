@@ -1,7 +1,7 @@
-//! Upgrade sequence for Walksnail Ascent, derived from the Caddx capture.
+//! Последовательность обновления Walksnail Ascent, восстановленная по дампам Caddx.
 //!
-//! These functions only build frames and interpret answers; they never touch a port.
-//! The caller writes each frame and feeds the ACK back in.
+//! Функции только собирают кадры и разбирают ответы: порт они не открывают.
+//! Запись кадров и ожидание ACK остаются на вызывающей стороне.
 
 use std::fmt;
 
@@ -11,10 +11,10 @@ use crate::{
     image::{Assessment, Change, ImageInfo},
 };
 
-/// Payload chunk size that Caddx uses for `SENDFILE_DATA`.
+/// Размер блока payload, которым Caddx передаёт файл в `SENDFILE_DATA`.
 pub const CHUNK_SIZE: usize = 1 << 20;
 
-/// Fixed 32-byte `REBOOT` payload that asks the device to enter its clean system.
+/// Фиксированный payload из 32 байт для `REBOOT`: команда войти в «чистую» систему.
 pub fn reboot_clean_payload() -> Vec<u8> {
     let mut payload = vec![0_u8; 32];
     payload[..5].copy_from_slice(b"clean");
@@ -101,8 +101,8 @@ impl fmt::Display for Step {
     }
 }
 
-/// `ArFileInfo`: 64-byte hex MD5, `u32` length, `u32` saveAsFile, 128-byte device path,
-/// 128-byte local path. Layout confirmed by the captured `SENDFILE_START` frame.
+/// `ArFileInfo`: 64 байта hex-MD5, `u32` длина, `u32` saveAsFile, 128 байт пути на устройстве,
+/// 128 байт пути на ПК. Раскладка подтверждена кадром `SENDFILE_START` из дампа.
 pub fn file_info_payload(file: &[u8], device_path: &str) -> Vec<u8> {
     let mut payload = vec![0_u8; 328];
     let digest = md5_of(file);
@@ -119,7 +119,7 @@ pub fn file_info_payload(file: &[u8], device_path: &str) -> Vec<u8> {
     payload
 }
 
-/// MD5 of the image, the same value the device checks after the transfer.
+/// MD5 образа — то же значение, которое устройство проверяет после передачи.
 pub fn md5_of(data: &[u8]) -> [u8; 16] {
     use md5::{Digest, Md5};
     let mut hasher = Md5::new();
@@ -127,7 +127,7 @@ pub fn md5_of(data: &[u8]) -> [u8; 16] {
     hasher.finalize().into()
 }
 
-/// Split the image into the chunks that Caddx sends, with their offsets.
+/// Делит образ на блоки так же, как это делает Caddx, и возвращает блоки со смещениями.
 pub fn chunks(image: &[u8]) -> Vec<(usize, &[u8])> {
     let mut result = Vec::new();
     let mut offset = 0;
@@ -138,9 +138,9 @@ pub fn chunks(image: &[u8]) -> Vec<(usize, &[u8])> {
     result
 }
 
-/// Full upgrade plan, in the order observed in the capture. After every step the caller
-/// must wait for an ACK with the same `seq`. `device_path` comes from
-/// [`ImageInfo::device_path`], never from the user's file name.
+/// Полный план обновления в том порядке, который виден в дампах. После каждого шага
+/// вызывающая сторона обязана дождаться ACK с тем же `seq`. `device_path` берётся из
+/// [`ImageInfo::device_path`], а не из имени файла пользователя.
 pub fn plan(image: &[u8], device_path: &str) -> Vec<Step> {
     let mut steps = Vec::new();
     let mut seq = 0_u32;
@@ -173,7 +173,7 @@ pub fn plan(image: &[u8], device_path: &str) -> Vec<Step> {
     steps
 }
 
-/// Status reported by `UPGRADE_STATUS`: 72-byte payload, percent then state code.
+/// Состояние из `UPGRADE_STATUS`: payload 72 байта, сначала процент, затем код состояния.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpgradeStatus {
     pub percent: u32,
@@ -235,9 +235,8 @@ fn status_text(status: u32) -> String {
     }
 }
 
-/// Checks that must pass before anything is written to a device. A downgrade is returned as
-/// [`Change::Downgrade`] and must be confirmed explicitly; without `allow_downgrade` it is
-/// refused.
+/// Проверки, которые обязаны пройти до любой записи в устройство. Понижение возвращается
+/// как [`Change::Downgrade`] и требует явного подтверждения: без `allow_downgrade` — отказ.
 pub fn preflight(
     image: &ImageInfo,
     device: &DeviceInfo,
@@ -280,7 +279,8 @@ mod tests {
         assert_eq!(steps[6].frame().command.code(), 0x76, "затем статус");
         assert_eq!(steps.len(), 7);
 
-        // Sequence numbers increase by one and each frame encodes and decodes intact.
+        // Номера последовательности растут на единицу, а каждый кадр кодируется и
+        // разбирается без потерь.
         for (index, step) in steps.iter().enumerate() {
             assert_eq!(step.seq(), index as u32);
             let bytes = step.frame().encode();
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn file_info_matches_the_captured_frame() {
-        // MD5 and size from the captured SENDFILE_START for the 17_5_8 transmitter image.
+        // MD5 и размер из снятого SENDFILE_START для образа передатчика 17_5_8.
         let file = b"stub";
         let info = file_info_payload(file, "/tmp/pc/Ascent_G_Sky_17_5_8.img");
         assert_eq!(info.len(), 328, "фиксированный размер ArFileInfo");
@@ -340,8 +340,9 @@ mod tests {
 
     #[test]
     fn hashes_the_real_image_like_caddx_did() {
-        // The 17_5_8 transmitter image is 12 164 404 bytes with this MD5; Caddx sent both
-        // in its SENDFILE_START frame. Skipped when the analysed image is not present.
+        // Образ передатчика 17_5_8 занимает 12 164 404 байта и имеет этот MD5 — Caddx
+        // передавал оба значения в кадре SENDFILE_START. Тест пропускается, если
+        // анализируемого образа нет рядом с проектом.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../analyze/Walksnail/firmware/Ascent_G_Sky_17_5_8.img");
         let Ok(bytes) = std::fs::read(&path) else {
@@ -437,7 +438,8 @@ mod tests {
 
     #[test]
     fn renamed_file_does_not_change_what_is_sent() {
-        // The user may name the file anything; the device path comes only from the header.
+        // Пользователь может назвать файл как угодно; путь на устройстве берётся только
+        // из заголовка образа.
         use crate::image::tests::header;
         let image = ImageInfo::parse(&header(4, "18_21_10")).unwrap();
         let steps = plan(b"payload", &image.device_path(Change::Upgrade));

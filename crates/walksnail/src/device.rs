@@ -1,11 +1,11 @@
-//! Parsing of the 300-byte `FIND_DEVICE` answer.
+//! Разбор ответа на команду `FIND_DEVICE`: фиксированный блок из 300 байт.
 
 use std::fmt;
 
-/// Field order confirmed by the Caddx `ResDeviceInfo` layout and by captured frames.
+/// Порядок полей подтверждён структурой `ResDeviceInfo` в Caddx и разбором живых кадров.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceInfo {
-    /// `receiveMaxSize`, 1 048 576 on current firmware.
+    /// `receiveMaxSize` — максимум, который устройство принимает за одну передачу.
     pub max_receive_size: u32,
     pub sdk_version: String,
     pub device_name: String,
@@ -19,7 +19,8 @@ pub struct DeviceInfo {
 
 pub const PAYLOAD_LEN: usize = 300;
 
-/// Transmitter (GT Pro, GT Max, Lite: firmware `Ascent_G_Sky_…`) or receiver (VRX family).
+/// Сторона линии: передатчик (GT Pro, GT Max, Lite — прошивка `Ascent_G_Sky_…`)
+/// или приёмник (семейство VRX — прошивка `…_Gnd_…`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Transmitter,
@@ -77,7 +78,7 @@ impl DeviceInfo {
         })
     }
 
-    /// Short human-readable summary for menus and logs.
+    /// Короткая строка для меню и журнала.
     pub fn summary(&self) -> String {
         format!(
             "{} | прошивка {} | железо {} | SN {} | {} °C",
@@ -85,9 +86,9 @@ impl DeviceInfo {
         )
     }
 
-    /// Which side of the link the device is. The firmware tag (`Ascent_G_Sky_…` on GT/Lite
-    /// transmitters, `…_Gnd_…` on VRX receivers) decides; the model name is a cross-check.
-    /// Returns `None` when the two disagree or neither is recognised.
+    /// Сторона линии. Решает тег прошивки (`Ascent_G_Sky_…` у передатчиков GT/Lite,
+    /// `…_Gnd_…` у приёмников VRX), а имя модели служит перекрёстной проверкой.
+    /// `None` — если признаки противоречат друг другу или не распознаны.
     pub fn side(&self) -> Option<Side> {
         let firmware = self.firmware.to_ascii_lowercase();
         let by_firmware = if firmware.contains("_sky_") {
@@ -112,7 +113,7 @@ impl DeviceInfo {
         }
     }
 
-    /// The trailing `NN_NN_NN` of the firmware name, which a firmware file must match.
+    /// Числовая версия `NN_NN_NN` в конце имени прошивки — с ней сверяется файл образа.
     pub fn firmware_version(&self) -> Option<&str> {
         let parts: Vec<&str> = self.firmware.rsplit('_').take(4).collect();
         if parts.len() < 3
@@ -134,7 +135,7 @@ impl DeviceInfo {
 mod tests {
     use super::*;
 
-    // Exact 300-byte payload captured from an Ascent GT running 16_5_9.
+    // Точный payload из 300 байт, снятый с передатчика Ascent GT на прошивке 16_5_9.
     const PAYLOAD: &str = concat!(
         "0000100000000000000000000000000000000000000000000000000000000000",
         "00000000417363656e745f47545f70726f000000000000000000000000000000",
